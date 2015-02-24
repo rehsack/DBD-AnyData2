@@ -22,7 +22,7 @@ use warnings;
 #################
 package DBD::AnyData2;
 #################
-use base qw(DBD::File);
+use base qw(DBI::DBD::SqlEngine);
 use vars qw($VERSION $ATTRIBUTION $drh $methods_already_installed);
 $VERSION     = '0.001';
 $ATTRIBUTION = 'DBD::AnyData2 by Jens Rehsack';
@@ -36,7 +36,7 @@ sub driver ($;$)
     my ( $class, $attr ) = @_;
     return $drh if ($drh);
 
-    # do the real work in DBD::File
+    # do the real work in DBI::DBD::SqlEngine
     #
     $attr->{Attribution} = 'DBD::AnyData2 by Jens Rehsack';
     $drh = $class->SUPER::driver($attr);
@@ -64,11 +64,11 @@ sub CLONE
 package DBD::AnyData2::dr;
 #####################
 $DBD::AnyData2::dr::imp_data_size = 0;
-@DBD::AnyData2::dr::ISA           = qw(DBD::File::dr);
+@DBD::AnyData2::dr::ISA           = qw(DBI::DBD::SqlEngine::dr);
 
 # you could put some :dr private methods here
 
-# you may need to over-ride some DBD::File::dr methods here
+# you may need to over-ride some DBI::DBD::SqlEngine::dr methods here
 # but you can probably get away with just letting it do the work
 # in most cases
 
@@ -76,7 +76,7 @@ $DBD::AnyData2::dr::imp_data_size = 0;
 package DBD::AnyData2::db;
 #####################
 $DBD::AnyData2::db::imp_data_size = 0;
-@DBD::AnyData2::db::ISA           = qw(DBD::File::db);
+@DBD::AnyData2::db::ISA           = qw(DBI::DBD::SqlEngine::db);
 
 use Carp qw/carp/;
 
@@ -101,22 +101,37 @@ sub init_valid_attributes
     # see the STORE methods below for how to check these attrs
     #
     $dbh->{ad2_valid_attrs} = {
-                                ad2_version        => 1,    # verbose DBD::AnyData2 version
-                                ad2_valid_attrs    => 1,    # DBD::AnyData2::db valid attrs
-                                ad2_readonly_attrs => 1,    # DBD::AnyData2::db r/o attrs
-                                ad2_meta           => 1,    # DBD::AnyData2 public access for f_meta
-                                ad2_tables         => 1,    # DBD::AnyData2 public access for f_meta
-                              };
+        ad2_version        => 1,    # verbose DBD::AnyData2 version
+        ad2_valid_attrs    => 1,    # DBD::AnyData2::db valid attrs
+        ad2_readonly_attrs => 1,    # DBD::AnyData2::db r/o attrs
+        ad2_storage_type   => 1,    # default storage type unless specified per table
+        ad2_storage_attrs  => 1,    # default storage attrs unless specified per table
+        ad2_format_type    => 1,    # default format type unless specified per table
+        ad2_format_attrs   => 1,    # default format attrs unless specified per table
+        ad2_meta           => 1,    # DBD::AnyData2 public access for f_meta
+        ad2_tables         => 1,    # DBD::AnyData2 public access for f_meta
+    };
     $dbh->{ad2_readonly_attrs} = {
-                                   ad2_version        => 1,    # verbose DBD::AnyData2 version
-                                   ad2_valid_attrs    => 1,    # DBD::AnyData2::db valid attrs
-                                   ad2_readonly_attrs => 1,    # DBD::AnyData2::db r/o attrs
-                                   ad2_meta           => 1,    # DBD::AnyData2 public access for f_meta
-                                 };
+        ad2_version        => 1,    # verbose DBD::AnyData2 version
+        ad2_valid_attrs    => 1,    # DBD::AnyData2::db valid attrs
+        ad2_readonly_attrs => 1,    # DBD::AnyData2::db r/o attrs
+        ad2_meta           => 1,    # DBD::AnyData2 public access for f_meta
+    };
 
     $dbh->{ad2_meta} = "ad2_tables";
 
     return $dbh->SUPER::init_valid_attributes();
+}
+
+sub init_default_attributes
+{
+    my ( $dbh, $phase ) = @_;
+
+    $dbh->SUPER::init_default_attributes($phase);
+    $dbh->{ad2_storage_type} = 'File::Blockwise';
+    $dbh->{ad2_format_type}  = 'Fixed';
+
+    return $dbh;
 }
 
 sub get_ad2_versions
@@ -133,16 +148,127 @@ sub get_ad2_versions
     return sprintf( "%s using %s", $dbh->{ad2_version}, $AnyData2::VERSION );
 }
 
-
 ############################
 package DBD::AnyData2::Statement;
 ############################
 
-@DBD::AnyData2::Statement::ISA = qw(DBD::File::Statement);
+@DBD::AnyData2::Statement::ISA = qw(DBI::DBD::SqlEngine::Statement);
 
 ########################
 package DBD::AnyData2::Table;
 ########################
+
+@DBD::AnyData2::Table::ISA = qw(DBI::DBD::SqlEngine::Table);
+
+my %reset_on_modify = (
+    ad2_storage_type => ["ad2_storage_attrs"],
+    ad2_format_type  => ["ad2_format_type"],
+);
+
+__PACKAGE__->register_reset_on_modify( \%reset_on_modify );
+
+sub bootstrap_table_meta
+{
+    my ( $self, $dbh, $meta, $table ) = @_;
+
+    $meta->{ad2_storage_type}  ||= $dbh->{ad2_storage_type}  || 'FileSystem';
+    $meta->{ad2_storage_attrs} ||= $dbh->{ad2_storage_attrs} || {};
+    $meta->{ad2_format_type}   ||= $dbh->{ad2_format_type}   || 'FileSystem';
+    $meta->{ad2_format_attrs}  ||= $dbh->{ad2_format_attrs}  || {};
+
+    $self->SUPER::bootstrap_table_meta( $dbh, $meta, $table );
+}
+
+sub drop ($$)
+{
+    my ( $self, $data ) = @_;
+    my $meta = $self->{meta};
+    ...;
+}
+
+#sub init_table_meta
+#{
+#    my ( $self, $dbh, $meta, $table ) = @_;
+#
+#    $self->SUPER::init_table_meta( $dbh, $meta, $table );
+#}
+
+sub open_data
+{
+    my ( $className, $meta, $attrs, $flags ) = @_;
+    $className->SUPER::open_data( $meta, $attrs, $flags );
+
+    $meta->{ad2h} = AnyData2->new( $meta->{ad2_storage_type}, $meta->{ad2_storage_attrs}, $meta->{ad2_format_type},
+        $meta->{ad2_format_attrs}, );
+}
+
+sub fetch_row
+{
+    my ( $self, $data ) = @_;
+}
+
+sub push_row
+{
+    my ( $self, $data, $fields ) = @_;
+    my $tbl = $self->{meta};
+    ...;
+}
+
+sub seek ($$$$)
+{
+    my ( $self, $data, $pos, $whence ) = @_;
+    my $meta = $self->{meta};
+    ...;
+    $meta->{ad2h}->seek( $pos, $whence );
+}
+
+sub truncate ($$)
+{
+    my ( $self, $data ) = @_;
+    my $meta = $self->{meta};
+    $meta->{ad2h}->truncate;
+    return 1;
+}
+
+########################
+package DBD::AnyData2::AdvancedChangingTable;
+########################
+
+@DBD::AnyData2::AdvancedChangingTable::ISA = qw(DBD::AnyData2::Table);
+
+use Carp qw/croak/;
+
+# you must define push_row except insert_new_row and update_specific_row is defined
+# it is called on inserts and updates as primitive
+#
+sub insert_new_row ($$$)
+{
+    my ( $self, $data, $row_aryref ) = @_;
+    my $meta   = $self->{meta};
+    my $ncols  = scalar( @{ $meta->{col_names} } );
+    my $nitems = scalar( @{$row_aryref} );
+    $ncols == $nitems
+      or croak "You tried to insert $nitems, but table is created with $ncols columns";
+
+    ...;
+}
+
+sub delete_one_row ($$$)
+{
+    my ( $self, $data, $aryref ) = @_;
+    my $meta = $self->{meta};
+    # we don't know the key item
+    ...;
+}
+
+sub update_one_row ($$$)
+{
+    my ( $self, $data, $aryref ) = @_;
+    my $meta = $self->{meta};
+    # we don't know the key item
+    my $key;
+    ...;
+}
 
 1;
 __END__
@@ -165,7 +291,7 @@ DBD::AnyData2 - a DBI driver for AnyData2
  });
 
 and other variations on connect() as shown in the L<DBI> docs,
-L<DBD::File metadata|DBD::File/Metadata> and L</Metadata>
+L<DBI::DBD::SqlEngine metadata|DBI::DBD::SqlEngine/Metadata> and L</Metadata>
 shown below.
 
 Use standard DBI prepare, execute, fetch, placeholders, etc.,
@@ -184,19 +310,6 @@ further modules.
 
 =head1 BUGS AND LIMITATIONS
 
-This module uses hash interfaces of two column file databases. While
-none of supported SQL engines have support for indices, the following
-statements really do the same (even if they mean something completely
-different) for each dbm type which lacks C<EXISTS> support:
-
-  $sth->do( "insert into foo values (1, 'hello')" );
-
-  # this statement does ...
-  $sth->do( "update foo set v='world' where k=1" );
-  # ... the same as this statement
-  $sth->do( "insert into foo values (1, 'world')" );
-
-This is considered to be a bug and might change in a future release.
 
 =head1 GETTING HELP, MAKING SUGGESTIONS, AND REPORTING BUGS
 
@@ -206,7 +319,7 @@ comp.lang.perl.modules newsgroup on usenet.  I cannot always answer
 every question quickly but there are many on the mailing list or in
 the newsgroup who can.
 
-DBD developers for DBD's which rely on DBD::File or DBD::AnyData2 or use
+DBD developers for DBD's which rely on DBI::DBD::SqlEngine or DBD::AnyData2 or use
 one of them as an example are suggested to join the DBI developers
 mailing list at dbi-dev@perl.org and strongly encouraged to join our
 IRC channel at L<irc://irc.perl.org/dbi>.
@@ -228,18 +341,6 @@ Please don't bother Jochen Wiedmann or Jeff Zucker for support - they
 handed over further maintenance to H.Merijn Brand and Jens Rehsack.
 
 =head1 ACKNOWLEDGEMENTS
-
-Many, many thanks to Tim Bunce for prodding me to write this, and for
-copious, wise, and patient suggestions all along the way. (Jeff Zucker)
-
-I send my thanks and acknowledgements to H.Merijn Brand for his
-initial refactoring of DBD::File and his strong and ongoing support of
-SQL::Statement. Without him, the current progress would never have
-been made.  And I have to name Martin J. Evans for each laugh (and
-correction) of all those funny word creations I (as non-native
-speaker) made to the documentation. And - of course - I have to thank
-all those unnamed contributors and testers from the Perl
-community. (Jens Rehsack)
 
 =head1 AUTHOR AND COPYRIGHT
 
