@@ -148,6 +148,38 @@ sub get_ad2_versions
     return sprintf( "%s using %s", $dbh->{ad2_version}, $AnyData2::VERSION );
 }
 
+package DBD::AnyData2::st;
+
+use strict;
+use warnings;
+
+our $imp_data_size = 0;
+our @ISA           = qw(DBI::DBD::SqlEngine::st);
+
+# ====== DataSource ============================================================
+
+package DBD::AnyData2::DataSource;
+
+use strict;
+use warnings;
+
+use Carp;
+
+@DBD::AnyData2::DataSource::ISA = "DBI::DBD::SqlEngine::DataSource";
+
+sub complete_table_name ($$;$)
+{
+    my ( $self, $meta, $table, $respect_case ) = @_;
+    $table;
+}
+
+sub open_data ($)
+{
+    my ( $self, $meta, $attrs, $flags ) = @_;
+    $meta->{ad2h} = AnyData2->new( @$meta{qw(ad2_format_type ad2_format_attrs ad2_storage_type ad2_storage_attrs)} );
+    defined $meta->{col_names} or $meta->{col_names} = $meta->{ad2h}->cols;
+}
+
 ############################
 package DBD::AnyData2::Statement;
 ############################
@@ -157,6 +189,8 @@ package DBD::AnyData2::Statement;
 ########################
 package DBD::AnyData2::Table;
 ########################
+
+use Carp qw/croak/;
 
 @DBD::AnyData2::Table::ISA = qw(DBI::DBD::SqlEngine::Table);
 
@@ -176,6 +210,8 @@ sub bootstrap_table_meta
     $meta->{ad2_format_type}   ||= $dbh->{ad2_format_type}   || 'FileSystem';
     $meta->{ad2_format_attrs}  ||= $dbh->{ad2_format_attrs}  || {};
 
+    $meta->{sql_data_source} or $meta->{sql_data_source} = "DBD::AnyData2::DataSource";
+
     $self->SUPER::bootstrap_table_meta( $dbh, $meta, $table );
 }
 
@@ -193,32 +229,29 @@ sub drop ($$)
 #    $self->SUPER::init_table_meta( $dbh, $meta, $table );
 #}
 
-sub open_data
-{
-    my ( $className, $meta, $attrs, $flags ) = @_;
-    $className->SUPER::open_data( $meta, $attrs, $flags );
-
-    $meta->{ad2h} = AnyData2->new( $meta->{ad2_storage_type}, $meta->{ad2_storage_attrs}, $meta->{ad2_format_type},
-        $meta->{ad2_format_attrs}, );
-}
-
 sub fetch_row
 {
     my ( $self, $data ) = @_;
+    my $meta = $self->{meta};
+
+    my $fields;
+    eval { $fields = $meta->{ad2h}->fetchrow; };
+    $@ and croak $@; # XXX kind-of diag
+    $fields or return; # XXX eof signalling?
+    $self->{row} = (@$fields ? $fields : undef);
 }
 
 sub push_row
 {
     my ( $self, $data, $fields ) = @_;
-    my $tbl = $self->{meta};
-    ...;
+    my $meta = $self->{meta};
+    $meta->{ad2h}->pushrow($fields);
 }
 
 sub seek ($$$$)
 {
     my ( $self, $data, $pos, $whence ) = @_;
     my $meta = $self->{meta};
-    ...;
     $meta->{ad2h}->seek( $pos, $whence );
 }
 
@@ -227,7 +260,19 @@ sub truncate ($$)
     my ( $self, $data ) = @_;
     my $meta = $self->{meta};
     $meta->{ad2h}->truncate;
-    return 1;
+    1;
+}
+
+# you may not need to explicitly DESTROY the ::Table
+# put cleanup code to run when the execute is done
+#
+sub DESTROY ($)
+{
+    my $self = shift;
+    my $meta = $self->{meta};
+    $meta->{ad2h} and undef $meta->{ad2h};
+
+    $self->SUPER::DESTROY();
 }
 
 ########################
@@ -237,6 +282,31 @@ package DBD::AnyData2::AdvancedChangingTable;
 @DBD::AnyData2::AdvancedChangingTable::ISA = qw(DBD::AnyData2::Table);
 
 use Carp qw/croak/;
+
+sub capability($)
+{
+    my ( $self, $capname ) = @_;
+    exists $self->{capabilities}->{$capname} and return $self->{capabilities}->{$capname};
+
+    my $meta = $self->{meta};
+
+    $capname eq "insert_new_row"
+      and $self->{capabilities}->{insert_new_row} = $meta->{ad2h}->can("insert_new_row");
+    $capname eq "delete_one_row"
+      and $self->{capabilities}->{delete_one_row} = $meta->{ad2h}->can("delete_one_row");
+    $capname eq "delete_current_row"
+      and $self->{capabilities}->{delete_current_row} =
+      ( $meta->{ad2h}->can("delete_current_row") and $meta->{ad2h}->capability("inplace_delete") );
+    $capname eq "update_one_row"
+      and $self->{capabilities}->{update_one_row} = $meta->{ad2h}->can("update_one_row");
+    $capname eq "update_current_row"
+      and $self->{capabilities}->{update_current_row} =
+      ( $meta->{ad2h}->can("update_current_row") and $meta->{ad2h}->capability("inplace_update") );
+    $capname eq "update_specific_row"
+      and $self->{capabilities}->{update_specific_row} = $meta->{ad2h}->can("update_specific_row");
+
+    $self->SUPER::capability($capname);
+}
 
 # you must define push_row except insert_new_row and update_specific_row is defined
 # it is called on inserts and updates as primitive
@@ -250,15 +320,14 @@ sub insert_new_row ($$$)
     $ncols == $nitems
       or croak "You tried to insert $nitems, but table is created with $ncols columns";
 
-    ...;
+    $meta->{ad2h}->insert_new_row($row_aryref);
 }
 
 sub delete_one_row ($$$)
 {
     my ( $self, $data, $aryref ) = @_;
     my $meta = $self->{meta};
-    # we don't know the key item
-    ...;
+    $meta->{ad2h}->delete_one_row($aryref);
 }
 
 sub update_one_row ($$$)
@@ -266,8 +335,19 @@ sub update_one_row ($$$)
     my ( $self, $data, $aryref ) = @_;
     my $meta = $self->{meta};
     # we don't know the key item
-    my $key;
-    ...;
+    $meta->{ad2h}->update_one_row($aryref);
+}
+
+sub update_specific_row ($$$$)
+{
+    my ( $self, $data, $aryref, $origary ) = @_;
+    my $meta   = $self->{meta};
+    my $key    = shift @$origary;
+    my $newkey = shift @$aryref;
+    return unless ( defined $key );
+    $key eq $newkey or croak "Updating a row with new transaction ID is not supported. DELETE and INSERT instead.";
+    my $row = ( ref($aryref) eq 'ARRAY' ) ? $aryref : [$aryref];
+    $meta->{ad2h}->update_specific_row($aryref, $origary);
 }
 
 1;
