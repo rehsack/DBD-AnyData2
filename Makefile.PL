@@ -7,9 +7,10 @@ use ExtUtils::MakeMaker;
 
 my %RUN_DEPS = (
     "Carp"            => 0,
-    "DBD::File"      => "0.44",
-    "DBI" => "1.633",
-    "SQL::Statement" => "1.405",
+    "DBD::File"       => "0.44",
+    "DBI"             => "1.633",
+    "Module::Runtime" => 0,
+    "SQL::Statement"  => "1.405",
 );
 my %CONFIGURE_DEPS = (
     'ExtUtils::MakeMaker' => 0,
@@ -17,7 +18,7 @@ my %CONFIGURE_DEPS = (
 my %BUILD_DEPS = ();
 
 my %TEST_DEPS = (
-    'Test::More'   => 0.90,
+    'Test::More' => 0.90,
 );
 
 WriteMakefile1(
@@ -56,7 +57,7 @@ WriteMakefile1(
             test    => { requires => {%TEST_DEPS} },
             runtime => {
                 recommends => {},
-                requires => { %RUN_DEPS, },
+                requires   => { %RUN_DEPS, },
             },
         },
     },
