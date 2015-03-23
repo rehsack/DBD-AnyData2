@@ -191,6 +191,7 @@ package DBD::AnyData2::Table;
 ########################
 
 use Carp qw/croak/;
+use Module::Runtime qw(require_module);
 
 @DBD::AnyData2::Table::ISA = qw(DBI::DBD::SqlEngine::Table);
 
@@ -211,6 +212,14 @@ sub bootstrap_table_meta
     $meta->{ad2_format_attrs}  ||= $dbh->{ad2_format_attrs}  || {};
 
     $meta->{sql_data_source} or $meta->{sql_data_source} = "DBD::AnyData2::DataSource";
+
+    my $ad2_ft = $meta->{ad2_format_type};
+    $ad2_ft =~ m/^AnyData2::Format::/ or $ad2_ft = "AnyData2::Format::${ad2_ft}";
+    eval {
+	require_module($ad2_ft);
+	$ad2_ft->isa("AnyData2::Role::AdvancedChanging")
+	  and $meta->{sql_table_class} ||= "DBD::AnyData2::AdvancedChangingTable";
+    };
 
     $self->SUPER::bootstrap_table_meta( $dbh, $meta, $table );
 }
@@ -342,10 +351,8 @@ sub update_specific_row ($$$$)
 {
     my ( $self, $data, $aryref, $origary ) = @_;
     my $meta   = $self->{meta};
-    my $key    = shift @$origary;
-    my $newkey = shift @$aryref;
-    return unless ( defined $key );
-    $key eq $newkey or croak "Updating a row with new transaction ID is not supported. DELETE and INSERT instead.";
+    return unless ( defined $origary->[0] );
+    $origary->[0] eq $aryref->[0] or croak "Updating a row with new transaction ID is not supported. DELETE and INSERT instead.";
     my $row = ( ref($aryref) eq 'ARRAY' ) ? $aryref : [$aryref];
     $meta->{ad2h}->update_specific_row($aryref, $origary);
 }
