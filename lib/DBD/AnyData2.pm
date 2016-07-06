@@ -228,7 +228,7 @@ sub drop ($$)
 {
     my ( $self, $data ) = @_;
     my $meta = $self->{meta};
-    ...;
+    $meta->{ad2h}->drop;
 }
 
 #sub init_table_meta

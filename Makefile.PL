@@ -6,7 +6,7 @@ use 5.008001;
 use ExtUtils::MakeMaker;
 
 my %RUN_DEPS = (
-    "AnyData2"        => 0,
+    "AnyData2"        => "0.002",
     "Carp"            => 0,
     "DBD::File"       => "0.44",
     "DBI"             => "1.633",
